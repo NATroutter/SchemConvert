@@ -1,0 +1,41 @@
+{
+ "entries": [
+   {
+	 "mc_material": "air",
+	 "hy_material": "hyair",
+	 "conditions": []
+   },
+   {
+	 "mc_material": "spruce_stairs",
+	 "hy_material": "wood_stairs",
+	 "conditions": [
+	   {
+		 "condition": "facing=west",
+		 "new": "rotation=180:direction=90"
+	   }
+	 ]
+   },
+   {
+	 "mc_material": "red_wool",
+	 "hy_material": "wool",
+	 "conditions": [
+	   {
+		 "condition": "",
+		 "new": "color=red"
+	   }
+	 ]
+   },
+   {
+	 "mc_material": "spruce_log",
+	 "hy_material": "wood_log",
+	 "conditions": [
+	   {
+		 "condition": "axis=y",
+		 "new": "rotation=90"
+	   }
+	 ]
+   }
+ ]
+}
+
+
