@@ -2,12 +2,14 @@ package fi.natroutter.schemconvert;
 
 
 import fi.natroutter.foxlib.logger.FoxLogger;
-import fi.natroutter.schemconvert.converters.SchematicConverter;
+import fi.natroutter.schemconvert.converters.minecraft.schematic.SchematicConverter;
 import fi.natroutter.schemconvert.gui.GuiTheme;
 import fi.natroutter.schemconvert.gui.dialog.AboutDialog;
 import fi.natroutter.schemconvert.gui.dialog.MessageDialog;
 import fi.natroutter.schemconvert.gui.main.MainWindow;
 import fi.natroutter.schemconvert.mappings.MappingLoader;
+import fi.natroutter.schemconvert.storage.DataStore;
+import fi.natroutter.schemconvert.storage.StorageProvider;
 import imgui.*;
 import imgui.app.Application;
 import imgui.app.Configuration;
@@ -30,12 +32,10 @@ public class SchemConvert extends Application {
     private static MappingLoader mappingLoader;
 
     @Getter
-    private static FoxLogger logger = new FoxLogger.Builder()
-            .setDebug(false)
-            .setPruneOlderThanDays(35)
-            .setSaveIntervalSeconds(300)
-            .setLoggerName("SchemConvert")
-            .build();
+    private static StorageProvider storageProvider;
+
+    @Getter
+    private static FoxLogger logger;
 
 
     @Getter
@@ -45,9 +45,17 @@ public class SchemConvert extends Application {
     private final MainWindow mainWindow = new MainWindow();
 
 
-    public static void main(final String[] args) {
+    public static void main(final String[] args) throws InterruptedException {
+        logger = new FoxLogger.Builder()
+                .setDebug(false)
+                .setPruneOlderThanDays(35)
+                .setSaveIntervalSeconds(300)
+                .setLoggerName("SchemConvert")
+                .build();
+        storageProvider = new StorageProvider();
         schematicConverter = new SchematicConverter();
         mappingLoader = new MappingLoader();
+
         launch(new SchemConvert());
         System.exit(0);
     }
@@ -75,6 +83,13 @@ public class SchemConvert extends Application {
     @Override
     protected void initImGui(final Configuration config) {
         super.initImGui(config);
+
+        // Add shutdown hook
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            logger.info("Saving storage...");
+            storageProvider.save();
+        }));
+
         final ImGuiIO io = ImGui.getIO();
         io.setIniFilename(null);
         io.addConfigFlags(ImGuiConfigFlags.NavEnableKeyboard);

@@ -1,9 +1,13 @@
 package fi.natroutter.schemconvert.gui.main;
 
+import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.schemconvert.SchemConvert;
-import fi.natroutter.schemconvert.converters.SchematicConverter;
+import fi.natroutter.schemconvert.converters.ConversionResult;
+import fi.natroutter.schemconvert.converters.minecraft.schematic.SchematicConverter;
 import fi.natroutter.schemconvert.mappings.Mapping;
 import fi.natroutter.schemconvert.mappings.MappingLoader;
+import fi.natroutter.schemconvert.storage.DataStore;
+import fi.natroutter.schemconvert.storage.StorageProvider;
 import fi.natroutter.schemconvert.utilities.Utils;
 import imgui.ImGui;
 import imgui.ImVec2;
@@ -16,13 +20,17 @@ import imgui.type.ImInt;
 import imgui.type.ImString;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.stream.Collectors;
 
 public class MainWindow {
 
+    private FoxLogger logger = SchemConvert.getLogger();
     private MappingLoader mappingLoader = SchemConvert.getMappingLoader();
     private SchematicConverter schematicConverter = SchemConvert.getSchematicConverter();
+    private StorageProvider storage = SchemConvert.getStorageProvider();
 
     private final ImString inputPath = new ImString();
     private final ImString outputPath = new ImString();
@@ -33,6 +41,10 @@ public class MainWindow {
 
     private File[] input_files;
     private File output_dir;
+
+    public MainWindow() {
+        loadData();
+    }
 
     public void render() {
         ImGui.setNextWindowPos(0, 0, ImGuiCond.Always);
@@ -60,7 +72,9 @@ public class MainWindow {
 
             ImGui.text("Schematic " + (directoryMode.get() ? "directory" : "file"));
             ImGui.setNextItemWidth(ImGui.getContentRegionAvailX() - buttonWidth - spacing);
-            ImGui.inputText("##schematic", inputPath, ImGuiInputTextFlags.CallbackResize);
+            if (ImGui.inputText("##schematic", inputPath, ImGuiInputTextFlags.CallbackResize)) {
+                storage.getData().setInputPath(directoryMode.get() ? inputPath.get() : "");
+            }
             ImGui.sameLine();
             if (ImGui.button("...##schematic")) {
                 selectInput();
@@ -68,7 +82,9 @@ public class MainWindow {
 
             ImGui.text("Output Directory");
             ImGui.setNextItemWidth(ImGui.getContentRegionAvailX() - buttonWidth - spacing);
-            ImGui.inputText("##output", outputPath, ImGuiInputTextFlags.CallbackResize);
+            if (ImGui.inputText("##output", outputPath, ImGuiInputTextFlags.CallbackResize)) {
+                storage.getData().setOutputPath(outputPath.get());
+            }
             ImGui.sameLine();
             if (ImGui.button("...##output")) {
                 selectOutput();
@@ -81,7 +97,7 @@ public class MainWindow {
             ImGui.separator();
             ImGui.text("Options");
             if (ImGui.checkbox("Directory mode", directoryMode)) {
-                inputPath.set("");
+                storage.getData().setDirectoryMode(directoryMode.get());
             }
 
             ImGui.separator();
@@ -94,9 +110,23 @@ public class MainWindow {
         ImGui.popStyleVar(1);
     }
 
+    private void loadData() {
+        DataStore data = storage.getData();
+        inputPath.set(data.getInputPath());
+        outputPath.set(data.getOutputPath());
+        directoryMode.set(data.isDirectoryMode());
+    }
+
     private void convert() {
         Mapping mapping = mappingLoader.getMappingByIndex(selectedMapping.get());
-        schematicConverter.convert(input_files, output_dir, mapping);
+        List<ConversionResult> results = schematicConverter.convertMultiple(input_files, output_dir, mapping);
+        for (ConversionResult result : results) {
+            try {
+                result.toHytalePrefab().save(result.getName(), output_dir);
+            } catch (IOException e) {
+                logger.error("Failed to save hytale prefab (name:'"+result.getName()+"'|output:'"+output_dir+"') : " + e.getMessage());
+            }
+        }
     }
 
     private void selectInput(){
