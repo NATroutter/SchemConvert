@@ -18,8 +18,6 @@ public class LegacyRegistry {
     private final Map<String, SchematicBlock> BLOCK_CACHE = new HashMap<>();
 
     public LegacyRegistry() {
-        BLOCK_CACHE.clear();
-
         InputStream stream = FileUtils.streamResource("legacy_mappings.txt");
 
         // 3. Read the file from the disk
@@ -35,8 +33,7 @@ public class LegacyRegistry {
             logger.info("Loaded " + BLOCK_CACHE.size() + " mappings from legacy_mappings.txt");
 
         } catch (IOException e) {
-            logger.error("Failed to load legacy_mappings.txt!");
-            e.printStackTrace();
+            logger.error("Failed to load legacy_mappings.txt! : " + e.getMessage());
         }
     }
 

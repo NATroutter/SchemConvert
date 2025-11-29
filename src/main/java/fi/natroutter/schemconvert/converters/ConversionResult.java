@@ -46,25 +46,29 @@ public class ConversionResult {
         return new HytalePrefab(hyBlocks);
     }
 
-    public String dump() {
+    public WriteResponse dump() {
         StringBuilder str = new StringBuilder();
-        str.append("Name: ").append(name);
-        str.append("Date: ").append(FoxLib.getTimestamp());
-        str.append("--------------");
+        str.append("Name: ").append(name).append("\n");
+        str.append("Date: ").append(FoxLib.getTimestamp()).append("\n");
+        str.append("--------------").append("\n");
         for (UniBlock block : blocks) {
             String data = block.getProperties().entrySet().stream()
                     .map(e -> e.getKey() + "=" + e.getValue())
                     .collect(Collectors.joining(","));
-            str.append(block.getMaterial()).append("[").append(data).append("]");
+
+            str.append(block.getMaterial());
+            str.append("(").append(block.getX()).append(",").append(block.getY()).append(",").append(block.getZ()).append(")");
+            if (!data.isEmpty()) {
+                str.append("[").append(data).append("]");
+            }
+
+            str.append("\n");
         }
 
         Path path = Path.of(System.getProperty("user.dir"), "dumps");
+        path.toFile().mkdirs();
         File dump = new File(path.toFile(), "dump-"+name+"-"+FoxLib.getTimestamp()+".txt");
-        WriteResponse resp = FileUtils.writeFile(dump, str.toString());
-        if (resp.success()) {
-            return dump.getAbsolutePath();
-        }
-        return null;
+        return FileUtils.writeFile(dump, str.toString());
     }
 
 

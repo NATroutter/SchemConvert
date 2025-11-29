@@ -3,6 +3,7 @@ package fi.natroutter.schemconvert.gui.main;
 import com.sk89q.worldedit.util.formatting.component.MessageBox;
 import fi.natroutter.foxlib.FoxLib;
 import fi.natroutter.foxlib.files.FileUtils;
+import fi.natroutter.foxlib.files.WriteResponse;
 import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.schemconvert.SchemConvert;
 import fi.natroutter.schemconvert.converters.ConversionResult;
@@ -120,7 +121,8 @@ public class MainWindow {
 
             if (ImGui.button("Dump Data", new ImVec2(ImGui.getContentRegionAvailX(), 20))) {
                 if (dump()) {
-                    messageDialog.show("SchemConvert","Schematic Data Dumped!", List.of(
+                    logger.info("File data dumped successfully!");
+                    messageDialog.show("SchemConvert","File data dumped!", List.of(
                             new DialogButton("OK"),
                             new DialogButton("Open", ()-> {
                                 logger.info("Opening file...");
@@ -132,6 +134,7 @@ public class MainWindow {
                             })
                     ));
                 } else {
+                    logger.error("File data dumped failed!");
                     messageDialog.show("SchemConvert", (directoryMode.get() ? "Files" : "file") + " dumping failed!");
                 }
             }
@@ -171,9 +174,7 @@ public class MainWindow {
                 break;
             }
         }
-
         directoryMode.set(data.isDirectoryMode());
-
     }
 
     private boolean convert() {
@@ -199,9 +200,11 @@ public class MainWindow {
 
         List<ConversionResult> results = schematicConverter.convertMultiple(input_files, output_dir, mapping);
         for (ConversionResult result : results) {
-            String path = result.dump();
-            if (path != null) {
+            WriteResponse dump = result.dump();
+            if (dump.success()) {
                 return true;
+            } else {
+                logger.error(dump.message());
             }
         }
         return false;

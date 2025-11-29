@@ -149,7 +149,7 @@ public class SchematicConverter implements IConverter {
                     int id = blocks[index] & 0xFF;
                     int dataVal = meta[index] & 0xF;
 
-                    SchematicBlock schematicBlock = legacyRegistry.get(id, dataVal);
+                    SchematicBlock schematicBlock = legacyRegistry.get(id, dataVal).clone();
                     schematicBlock.setX(x);
                     schematicBlock.setY(y);
                     schematicBlock.setZ(z);
