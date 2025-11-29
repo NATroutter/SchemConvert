@@ -1,17 +1,22 @@
 package fi.natroutter.schemconvert.converters;
 
-import com.cryptomorin.xseries.XMaterial;
+import fi.natroutter.foxlib.FoxLib;
+import fi.natroutter.foxlib.files.FileUtils;
+import fi.natroutter.foxlib.files.ReadResponse;
+import fi.natroutter.foxlib.files.WriteResponse;
 import fi.natroutter.schemconvert.converters.hytale.prefab.HytaleBlock;
 import fi.natroutter.schemconvert.converters.hytale.prefab.HytalePrefab;
 import fi.natroutter.schemconvert.mappings.Mapping;
+import fi.natroutter.schemconvert.utilities.Utils;
 import lombok.AllArgsConstructor;
+
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.io.File;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Data
 @AllArgsConstructor
@@ -26,7 +31,7 @@ public class ConversionResult {
         for (UniBlock block : blocks) {
             Mapping.Entry mappingEntry = findMappingEntry(block, mapping);
             if (mappingEntry == null) {
-                return null;
+                continue;
             }
 
             HytaleBlock hytaleBlock = new HytaleBlock();
@@ -41,11 +46,32 @@ public class ConversionResult {
         return new HytalePrefab(hyBlocks);
     }
 
+    public String dump() {
+        StringBuilder str = new StringBuilder();
+        str.append("Name: ").append(name);
+        str.append("Date: ").append(FoxLib.getTimestamp());
+        str.append("--------------");
+        for (UniBlock block : blocks) {
+            String data = block.getProperties().entrySet().stream()
+                    .map(e -> e.getKey() + "=" + e.getValue())
+                    .collect(Collectors.joining(","));
+            str.append(block.getMaterial()).append("[").append(data).append("]");
+        }
+
+        Path path = Path.of(System.getProperty("user.dir"), "dumps");
+        File dump = new File(path.toFile(), "dump-"+name+"-"+FoxLib.getTimestamp()+".txt");
+        WriteResponse resp = FileUtils.writeFile(dump, str.toString());
+        if (resp.success()) {
+            return dump.getAbsolutePath();
+        }
+        return null;
+    }
 
 
     private Mapping.Entry findMappingEntry(UniBlock data, Mapping mapping) {
         for (Mapping.Entry entry : mapping.getEntries()) {
-            if (entry.getMc_material().equalsIgnoreCase(data.getMaterial().name())) {
+            if (entry.getMc_material().equalsIgnoreCase(data.getMaterial())) {
+        //  if (entry.getMc_material().equalsIgnoreCase(data.getMaterial().name())) { //TODO material checking
                 if (matchesCondition(entry, data.getProperties())) {
                     return entry;
                 }

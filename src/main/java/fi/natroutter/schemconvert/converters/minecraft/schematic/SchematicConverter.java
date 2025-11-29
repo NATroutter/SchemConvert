@@ -22,6 +22,9 @@ import com.sk89q.jnbt.*;
 
 public class SchematicConverter implements IConverter {
 
+    private static FoxLogger logger = SchemConvert.getLogger();
+    private static LegacyRegistry legacyRegistry = SchemConvert.getLegacyRegistry();
+
     @Override
     public ConversionResult convertSingle(File input_file, File output_dir, Mapping mapping) {
         SchematicData schematic = loadSchematicManually(input_file);
@@ -51,7 +54,7 @@ public class SchematicConverter implements IConverter {
             CompoundTag rootTag = (CompoundTag) rootNamed.getTag();
             Map<String, Tag<?,?>> data = rootTag.getValue();
 
-            // 1. Handle "Schematic" Wrapper (Common in Sponge files)
+            // 1. Handle "Schematic" Wrapper
             if (data.containsKey("Schematic")) {
                 data = ((CompoundTag) data.get("Schematic")).getValue();
             }
@@ -60,17 +63,20 @@ public class SchematicConverter implements IConverter {
             Tag blocksTag = data.get("Blocks");
 
             if (blocksTag instanceof CompoundTag) {
-                // "Blocks" is a Container -> It's Sponge V3 (Your New File)
+                // "Blocks" is a Container -> It's Sponge V3
+                logger.info("Parsing Schematic: " + FileUtils.getBasename(file) + " | Version: " + SchematicFormat.SPONGE_V3.name());
                 return parseSpongeV3(data, (CompoundTag) blocksTag);
             } else if (blocksTag instanceof ByteArrayTag) {
-                // "Blocks" is a ByteArray -> It's Legacy (Your Old File)
+                // "Blocks" is a ByteArray -> It's Legacy
+                logger.info("Parsing Schematic: " + FileUtils.getBasename(file) + " | Version: " + SchematicFormat.LEGACY.name());
                 return parseLegacy(data);
             } else if (data.containsKey("Palette")) {
-                // "Palette" at top level -> Sponge V1/V2 (Just in case)
+                // "Palette" at top level -> Sponge V1/V2
+                logger.info("Parsing Schematic: " + FileUtils.getBasename(file) + " | Version: " + SchematicFormat.SPONGE_V2.name());
                 return parseSpongeV2(data);
             }
 
-            System.out.println("Unknown Structure. Keys: " + data.keySet());
+            logger.error("Unknown Structure. Keys: " + data.keySet());
             return null;
         } catch (FileNotFoundException e) {
             throw new RuntimeException(e);
@@ -95,7 +101,7 @@ public class SchematicConverter implements IConverter {
             palette.put(((IntTag) entry.getValue()).getValue(), entry.getKey());
         }
 
-        // 2. Data is inside "Blocks" (Your log showed "Data (ByteArray)")
+        // 2. Data is inside "Blocks"
         byte[] blockDataBytes = ((ByteArrayTag) blocksMap.get("Data")).getValue();
 
         // Sponge uses VarInts packed into a ByteArray
@@ -143,10 +149,11 @@ public class SchematicConverter implements IConverter {
                     int id = blocks[index] & 0xFF;
                     int dataVal = meta[index] & 0xF;
 
-                    // Store as raw number string. You can map "1"->"stone" later.
-                    HashMap<String, String> props = new HashMap<>();
-                    props.put("data", String.valueOf(dataVal));
-                    blockList.add(new SchematicBlock(x, y, z, String.valueOf(id), props));
+                    SchematicBlock schematicBlock = legacyRegistry.get(id, dataVal);
+                    schematicBlock.setX(x);
+                    schematicBlock.setY(y);
+                    schematicBlock.setZ(z);
+                    blockList.add(schematicBlock);
                 }
             }
         }

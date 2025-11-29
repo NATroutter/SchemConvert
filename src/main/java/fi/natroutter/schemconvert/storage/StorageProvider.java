@@ -49,9 +49,6 @@ public class StorageProvider {
     public void save() {
         if (data != null) {
             logger.info("Datastore Saved!");
-            logger.warn("test2: " + data.getInputPath());
-            logger.warn("test3: " + data.getOutputPath());
-            logger.warn("test4: " + data.isDirectoryMode());
             manager.save(data.toJson());
         }
     }

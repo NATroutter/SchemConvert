@@ -1,126 +1,77 @@
 package fi.natroutter.schemconvert.gui.dialog;
 
 import imgui.ImGui;
+import imgui.ImVec2;
+import imgui.flag.ImGuiCond;
 import imgui.flag.ImGuiWindowFlags;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class MessageDialog {
 
     private boolean shouldOpen = false;
-    private String title = "";
     private String message = "";
-    private MessageBoxType type = MessageBoxType.INFO;
-    private Runnable onConfirm = null;
-    private Runnable onCancel = null;
-
-    public enum MessageBoxType {
-        INFO,           // OK button only
-        WARNING,        // OK button only
-        ERROR,          // OK button only
-        YES_NO,         // Yes/No buttons
-        OK_CANCEL       // OK/Cancel buttons
-    }
+    private List<DialogButton> buttons = new ArrayList<>();
+    private String popupId = "";
 
     public void show(String title, String message) {
-        show(title, message, MessageBoxType.INFO);
+        show(title, message, List.of(new DialogButton("OK")));
     }
 
-    public void show(String title, String message, MessageBoxType type) {
-        this.title = title;
+    public void show(String title, String message, List<DialogButton> buttons) {
         this.message = message;
-        this.type = type;
+        this.buttons = buttons;
+        this.popupId = title + "##MessageDialog";
         this.shouldOpen = true;
-        this.onConfirm = null;
-        this.onCancel = null;
-    }
-
-    public void show(String title, String message, MessageBoxType type, Runnable onConfirm) {
-        this.title = title;
-        this.message = message;
-        this.type = type;
-        this.shouldOpen = true;
-        this.onConfirm = onConfirm;
-        this.onCancel = null;
-    }
-
-    public void show(String title, String message, MessageBoxType type, Runnable onConfirm, Runnable onCancel) {
-        this.title = title;
-        this.message = message;
-        this.type = type;
-        this.shouldOpen = true;
-        this.onConfirm = onConfirm;
-        this.onCancel = onCancel;
     }
 
     public void render() {
         if (shouldOpen) {
-            ImGui.openPopup(title);
+            ImGui.openPopup(popupId);
             shouldOpen = false;
+
+            // Center the popup on the first appearance
+            float centerX = ImGui.getIO().getDisplaySizeX() / 2;
+            float centerY = ImGui.getIO().getDisplaySizeY() / 2;
+            ImGui.setNextWindowPos(centerX, centerY, ImGuiCond.Appearing, 0.5f, 0.5f);
+            ImGui.setNextWindowSize(300, 200, ImGuiCond.Appearing);
         }
 
-        if (ImGui.beginPopupModal(title, ImGuiWindowFlags.AlwaysAutoResize)) {
-            ImGui.text(message);
+      if (ImGui.beginPopupModal(popupId, ImGuiWindowFlags.AlwaysAutoResize)) {
+            ImGui.textWrapped(message);
+            ImGui.spacing();
             ImGui.separator();
+            ImGui.spacing();
 
-            switch (type) {
-                case INFO:
-                case WARNING:
-                case ERROR:
-                    renderOkButton();
-                    break;
-                case YES_NO:
-                    renderYesNoButtons();
-                    break;
-                case OK_CANCEL:
-                    renderOkCancelButtons();
-                    break;
-            }
+            renderButtons();
 
             ImGui.endPopup();
         }
     }
 
-    private void renderOkButton() {
-        if (ImGui.button("OK", 120, 0)) {
-            if (onConfirm != null) {
-                onConfirm.run();
-            }
-            ImGui.closeCurrentPopup();
-        }
-    }
-
-    private void renderYesNoButtons() {
-        if (ImGui.button("Yes", 120, 0)) {
-            if (onConfirm != null) {
-                onConfirm.run();
-            }
-            ImGui.closeCurrentPopup();
+    private void renderButtons() {
+        if (buttons.isEmpty()) {
+            return;
         }
 
-        ImGui.sameLine();
+        float availableWidth = ImGui.getContentRegionAvailX();
+        float spacing = ImGui.getStyle().getItemSpacingX();
+        float totalSpacing = spacing * (buttons.size() - 1);
+        float buttonWidth = (availableWidth - totalSpacing) / buttons.size();
 
-        if (ImGui.button("No", 120, 0)) {
-            if (onCancel != null) {
-                onCancel.run();
+        for (int i = 0; i < buttons.size(); i++) {
+            DialogButton button = buttons.get(i);
+            if (ImGui.button(button.label, new ImVec2(buttonWidth, 20))) {
+                if (button.action != null) {
+                    button.action.run();
+                }
+                ImGui.closeCurrentPopup();
             }
-            ImGui.closeCurrentPopup();
-        }
-    }
 
-    private void renderOkCancelButtons() {
-        if (ImGui.button("OK", 120, 0)) {
-            if (onConfirm != null) {
-                onConfirm.run();
+            if (i < buttons.size() - 1) {
+                ImGui.sameLine(0, spacing);
             }
-            ImGui.closeCurrentPopup();
-        }
-
-        ImGui.sameLine();
-
-        if (ImGui.button("Cancel", 120, 0)) {
-            if (onCancel != null) {
-                onCancel.run();
-            }
-            ImGui.closeCurrentPopup();
         }
     }
 }

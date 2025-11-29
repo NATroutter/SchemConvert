@@ -1,9 +1,15 @@
 package fi.natroutter.schemconvert.gui.main;
 
+import com.sk89q.worldedit.util.formatting.component.MessageBox;
+import fi.natroutter.foxlib.FoxLib;
+import fi.natroutter.foxlib.files.FileUtils;
 import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.schemconvert.SchemConvert;
 import fi.natroutter.schemconvert.converters.ConversionResult;
+import fi.natroutter.schemconvert.converters.hytale.prefab.HytalePrefab;
 import fi.natroutter.schemconvert.converters.minecraft.schematic.SchematicConverter;
+import fi.natroutter.schemconvert.gui.dialog.DialogButton;
+import fi.natroutter.schemconvert.gui.dialog.MessageDialog;
 import fi.natroutter.schemconvert.mappings.Mapping;
 import fi.natroutter.schemconvert.mappings.MappingLoader;
 import fi.natroutter.schemconvert.storage.DataStore;
@@ -21,8 +27,11 @@ import imgui.type.ImString;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 public class MainWindow {
@@ -38,8 +47,9 @@ public class MainWindow {
     private final ImInt selectedMapping = new ImInt(0);
 
     private MainMenuBar menuBar = new MainMenuBar();
+    private MessageDialog messageDialog = SchemConvert.getMessageDialog();
 
-    private File[] input_files;
+    private List<File> input_files = new ArrayList<>();
     private File output_dir;
 
     public MainWindow() {
@@ -72,9 +82,7 @@ public class MainWindow {
 
             ImGui.text("Schematic " + (directoryMode.get() ? "directory" : "file"));
             ImGui.setNextItemWidth(ImGui.getContentRegionAvailX() - buttonWidth - spacing);
-            if (ImGui.inputText("##schematic", inputPath, ImGuiInputTextFlags.CallbackResize)) {
-                storage.getData().setInputPath(directoryMode.get() ? inputPath.get() : "");
-            }
+            ImGui.inputText("##schematic", inputPath, ImGuiInputTextFlags.CallbackResize | ImGuiInputTextFlags.ReadOnly);
             ImGui.sameLine();
             if (ImGui.button("...##schematic")) {
                 selectInput();
@@ -82,9 +90,7 @@ public class MainWindow {
 
             ImGui.text("Output Directory");
             ImGui.setNextItemWidth(ImGui.getContentRegionAvailX() - buttonWidth - spacing);
-            if (ImGui.inputText("##output", outputPath, ImGuiInputTextFlags.CallbackResize)) {
-                storage.getData().setOutputPath(outputPath.get());
-            }
+            ImGui.inputText("##output", outputPath, ImGuiInputTextFlags.CallbackResize | ImGuiInputTextFlags.ReadOnly);
             ImGui.sameLine();
             if (ImGui.button("...##output")) {
                 selectOutput();
@@ -92,17 +98,50 @@ public class MainWindow {
 
             ImGui.text("Mappings");
             ImGui.setNextItemWidth(ImGui.getContentRegionAvailX());
-            ImGui.combo("##Mappings", selectedMapping, mappingLoader.names(), ImGuiInputTextFlags.CallbackResize);
+            if (ImGui.combo("##Mappings", selectedMapping, mappingLoader.names(), ImGuiInputTextFlags.CallbackResize)) {
+                String name = mappingLoader.getNameByIndex(selectedMapping.get());
+                if (name != null) {
+                    storage.getData().setMapping(name.replace(".json", ""));
+                    storage.save();
+                }
+            }
 
             ImGui.separator();
             ImGui.text("Options");
             if (ImGui.checkbox("Directory mode", directoryMode)) {
                 storage.getData().setDirectoryMode(directoryMode.get());
+                storage.getData().setInputPath(new ArrayList<>());
+                inputPath.set("");
+                input_files = new ArrayList<>();
+                storage.save();
             }
 
             ImGui.separator();
+
+            if (ImGui.button("Dump Data", new ImVec2(ImGui.getContentRegionAvailX(), 20))) {
+                if (dump()) {
+                    messageDialog.show("SchemConvert","Schematic Data Dumped!", List.of(
+                            new DialogButton("OK"),
+                            new DialogButton("Open", ()-> {
+                                logger.info("Opening file...");
+                                try {
+                                    FileUtils.openFileExplorer(Path.of(System.getProperty("user.dir"), "dumps").toFile());
+                                } catch (IOException e) {
+                                    logger.error("Failed to open file explorer : " + e.getMessage());
+                                }
+                            })
+                    ));
+                } else {
+                    messageDialog.show("SchemConvert", (directoryMode.get() ? "Files" : "file") + " dumping failed!");
+                }
+            }
+
             if (ImGui.button("Convert", new ImVec2(ImGui.getContentRegionAvailX(), 20))) {
-                convert();
+                if (convert()) {
+                    messageDialog.show("SchemConvert", (directoryMode.get() ? "Files" : "file") + " converted successfully!");
+                } else {
+                    messageDialog.show("SchemConvert", (directoryMode.get() ? "Files" : "file") + " converted failed!");
+                }
             }
 
         }
@@ -112,21 +151,60 @@ public class MainWindow {
 
     private void loadData() {
         DataStore data = storage.getData();
-        inputPath.set(data.getInputPath());
+        if (!data.getInputPath().isEmpty()) {
+            if (storage.getData().isDirectoryMode()) {
+                File f = new File(data.getInputPath().getFirst());
+                inputPath.set(f.getParentFile().getAbsolutePath());
+            } else {
+                inputPath.set(data.getInputPath().stream().map(File::new).map(File::getName).collect(Collectors.joining(",")));
+            }
+            input_files = data.getInputPath().stream().map(File::new).toList();
+        }
         outputPath.set(data.getOutputPath());
+        output_dir = new File(data.getOutputPath());
+
+        String mappingName = storage.getData().getMapping();
+        for (int i = 0; i < mappingLoader.names().length; i++) {
+            String name = mappingLoader.names()[i];
+            if (name.equals(mappingName)) {
+                selectedMapping.set(i);
+                break;
+            }
+        }
+
         directoryMode.set(data.isDirectoryMode());
+
     }
 
-    private void convert() {
+    private boolean convert() {
         Mapping mapping = mappingLoader.getMappingByIndex(selectedMapping.get());
+
         List<ConversionResult> results = schematicConverter.convertMultiple(input_files, output_dir, mapping);
         for (ConversionResult result : results) {
             try {
-                result.toHytalePrefab().save(result.getName(), output_dir);
+                HytalePrefab prefab = result.toHytalePrefab();
+                if (prefab != null) {
+                    prefab.save(result.getName(), output_dir);
+                    return true;
+                }
             } catch (IOException e) {
                 logger.error("Failed to save hytale prefab (name:'"+result.getName()+"'|output:'"+output_dir+"') : " + e.getMessage());
             }
         }
+        return false;
+    }
+
+    private boolean dump() {
+        Mapping mapping = mappingLoader.getMappingByIndex(selectedMapping.get());
+
+        List<ConversionResult> results = schematicConverter.convertMultiple(input_files, output_dir, mapping);
+        for (ConversionResult result : results) {
+            String path = result.dump();
+            if (path != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void selectInput(){
@@ -137,16 +215,19 @@ public class MainWindow {
             if (selected != null) {
                 inputPath.set(selected.getAbsolutePath());
 
-                input_files = selected.listFiles(file ->
+                input_files = Arrays.stream(Objects.requireNonNull(selected.listFiles(file ->
                         file.getName().endsWith(".schematic") || file.getName().endsWith(".schem")
-                );
+                ))).toList();
             }
         } else {
-            input_files = Utils.openFilesDialog(path.exists() ? path : Utils.AppDir(),"Select schematic Files");
-            if (input_files != null) {
-                inputPath.set(Arrays.stream(input_files).map(File::getName).collect(Collectors.joining(",")));
+            File[] files = Utils.openFilesDialog(path.exists() ? path : Utils.AppDir(), "Select schematic Files");
+            if (files != null) {
+                input_files = List.of(files);
+                inputPath.set(input_files.stream().map(File::getName).collect(Collectors.joining(",")));
             }
         }
+        storage.getData().setInputPath(input_files.stream().map(File::getAbsolutePath).toList());
+        storage.save();
     }
 
     private void selectOutput() {
@@ -154,7 +235,9 @@ public class MainWindow {
         output_dir = Utils.openDirectoryDialog(path.exists() ? path : Utils.AppDir(),"Select Output Folder");
         if (output_dir != null) {
             outputPath.set(output_dir.getAbsolutePath());
+            storage.getData().setOutputPath(output_dir.getAbsolutePath());
         }
+        storage.save();
     }
 
 }

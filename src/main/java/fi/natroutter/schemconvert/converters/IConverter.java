@@ -11,7 +11,7 @@ import java.util.Map;
 public interface IConverter {
     ConversionResult convertSingle(File input_files, File output_dir, Mapping mapping);
 
-    default List<ConversionResult> convertMultiple(File[] input_files, File output_dir, Mapping mapping){
+    default List<ConversionResult> convertMultiple(List<File> input_files, File output_dir, Mapping mapping){
         List<ConversionResult> results = new ArrayList<>();
         for (File file : input_files) {
             results.add(convertSingle(file, output_dir, mapping));

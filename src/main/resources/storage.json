@@ -1,5 +1,6 @@
 {
-		"input_path": "",
+		"input_path": [],
 		"output_path": "",
-		"directory_mode":false
+		"directory_mode":false,
+  		"mappings": "default.json"
 }

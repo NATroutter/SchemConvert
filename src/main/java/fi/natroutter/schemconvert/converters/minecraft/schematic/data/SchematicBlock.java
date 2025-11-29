@@ -1,12 +1,10 @@
 package fi.natroutter.schemconvert.converters.minecraft.schematic.data;
 
-import com.cryptomorin.xseries.XMaterial;
+import fi.natroutter.foxlib.FoxLib;
 import fi.natroutter.schemconvert.converters.UniBlock;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.bukkit.Bukkit;
-import org.bukkit.material.MaterialData;
 
 import java.util.HashMap;
 
@@ -22,8 +20,28 @@ public class SchematicBlock {
     private HashMap<String, String> properties;
 
     public UniBlock toUniBlock() {
-        XMaterial material = XMaterial.matchXMaterial(internalId).orElse(null);
-        return new UniBlock(x,y,z,material,properties);
+        if (internalId.startsWith("minecraft:")) {
+            internalId = internalId.substring(10);
+        }
+        return new UniBlock(x, y, z, internalId, properties);
+    }
+
+
+    public static SchematicBlock fromLegacy(String input) {
+        SchematicBlock block = new SchematicBlock();
+        block.properties = new HashMap<>();
+        int bracketIndex = input.indexOf('[');
+        if (bracketIndex == -1) {
+            block.internalId = input;
+        } else {
+            block.internalId = input.substring(0, bracketIndex);
+            String props = input.substring(bracketIndex + 1, input.length() - 1);
+            for (String pair : props.split(",")) {
+                String[] kv = pair.split("=");
+                if (kv.length == 2) block.properties.put(kv[0], kv[1]);
+            }
+        }
+        return block;
     }
 
 }

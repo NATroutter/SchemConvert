@@ -34,6 +34,10 @@ public class MappingLoader {
         return mappings.get(keys()[index]);
     }
 
+    public String getNameByIndex(int index) {
+        return keys()[index];
+    }
+
     public MappingLoader() {
         File mappingsDir = Path.of(System.getProperty("user.dir"), "mappings").toFile();
 

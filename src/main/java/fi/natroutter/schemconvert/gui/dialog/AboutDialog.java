@@ -52,7 +52,7 @@ public class AboutDialog {
             }).exceptionally(ex -> {
                 checkingForUpdates = false;
                 updateStatus = "Failed to check for updates";
-                System.err.println("Update check failed: " + ex.getMessage());
+                logger.error("Update check failed: " + ex.getMessage());
                 return null;
             });
         }
