@@ -1,6 +1,5 @@
 package fi.natroutter.schemconvert.gui.main;
 
-import com.sk89q.worldedit.util.formatting.component.MessageBox;
 import fi.natroutter.foxlib.FoxLib;
 import fi.natroutter.foxlib.files.FileUtils;
 import fi.natroutter.foxlib.files.WriteResponse;
@@ -23,6 +22,7 @@ import imgui.flag.ImGuiInputTextFlags;
 import imgui.flag.ImGuiStyleVar;
 import imgui.flag.ImGuiWindowFlags;
 import imgui.type.ImBoolean;
+import imgui.type.ImFloat;
 import imgui.type.ImInt;
 import imgui.type.ImString;
 
@@ -33,6 +33,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 public class MainWindow {
@@ -46,6 +48,7 @@ public class MainWindow {
     private final ImString outputPath = new ImString();
     private final ImBoolean directoryMode = new ImBoolean(false);
     private final ImInt selectedMapping = new ImInt(0);
+    private final ImFloat progress = new ImFloat(0.0f);
 
     private MainMenuBar menuBar = new MainMenuBar();
     private MessageDialog messageDialog = SchemConvert.getMessageDialog();
@@ -63,19 +66,23 @@ public class MainWindow {
 
         int windowFlags =
                 ImGuiWindowFlags.NoDocking |
-                ImGuiWindowFlags.NoTitleBar |
-                ImGuiWindowFlags.NoCollapse |
-                ImGuiWindowFlags.NoResize |
-                ImGuiWindowFlags.NoMove |
-                ImGuiWindowFlags.NoBringToFrontOnFocus |
-                ImGuiWindowFlags.MenuBar |
-                ImGuiWindowFlags.NoNavFocus;
+                        ImGuiWindowFlags.NoTitleBar |
+                        ImGuiWindowFlags.NoCollapse |
+                        ImGuiWindowFlags.NoResize |
+                        ImGuiWindowFlags.NoMove |
+                        ImGuiWindowFlags.NoBringToFrontOnFocus |
+                        ImGuiWindowFlags.MenuBar |
+                        ImGuiWindowFlags.NoNavFocus;
 
         ImGui.pushStyleVar(ImGuiStyleVar.WindowRounding, 0.0f);
 
         if (ImGui.begin("SchemConvert", windowFlags)) {
 
             menuBar.render();
+
+            // Create a child window for main content (leaves space for progress bar)
+            float progressBarHeight = 25; // Height of progress bar + padding
+            ImGui.beginChild("MainContent", 0, -progressBarHeight, false, ImGuiWindowFlags.NoBackground);
 
             ImVec2 buttonSize = ImGui.calcTextSize("...");
             float buttonWidth = buttonSize.x + ImGui.getStyle().getFramePaddingX() * 2;
@@ -121,10 +128,10 @@ public class MainWindow {
 
             if (ImGui.button("Dump Data", new ImVec2(ImGui.getContentRegionAvailX(), 20))) {
                 if (dump()) {
-                    logger.info("File data dumped successfully!");
-                    messageDialog.show("SchemConvert","File data dumped!", List.of(
+                    logger.info("Files dumped successfully!");
+                    messageDialog.show("SchemConvert", "Files dumped successfully!", List.of(
                             new DialogButton("OK"),
-                            new DialogButton("Open", ()-> {
+                            new DialogButton("Open", () -> {
                                 logger.info("Opening file...");
                                 try {
                                     FileUtils.openFileExplorer(Path.of(System.getProperty("user.dir"), "dumps").toFile());
@@ -134,18 +141,26 @@ public class MainWindow {
                             })
                     ));
                 } else {
-                    logger.error("File data dumped failed!");
-                    messageDialog.show("SchemConvert", (directoryMode.get() ? "Files" : "file") + " dumping failed!");
+                    logger.error("File dumping failed!");
+                    messageDialog.show("SchemConvert", "File dumping failed!");
                 }
             }
 
-            if (ImGui.button("Convert", new ImVec2(ImGui.getContentRegionAvailX(), 20))) {
-                if (convert()) {
-                    messageDialog.show("SchemConvert", (directoryMode.get() ? "Files" : "file") + " converted successfully!");
-                } else {
-                    messageDialog.show("SchemConvert", (directoryMode.get() ? "Files" : "file") + " converted failed!");
-                }
+
+            if (ImGui.button("Convert", new ImVec2(ImGui.getContentRegionAvailX(), 40))) {
+                CompletableFuture<Boolean> convert = convert();
+                convert.thenAccept(bool -> {
+                    if (bool) {
+                        messageDialog.show("SchemConvert", (directoryMode.get() ? "Files" : "file") + " converted successfully!");
+                    } else {
+                        messageDialog.show("SchemConvert", (directoryMode.get() ? "Files" : "file") + " converted failed!");
+                    }
+                });
             }
+
+            ImGui.endChild();
+
+            ImGui.progressBar(progress.get(), new ImVec2(ImGui.getContentRegionAvailX(), 20));
 
         }
         ImGui.end();
@@ -177,28 +192,38 @@ public class MainWindow {
         directoryMode.set(data.isDirectoryMode());
     }
 
-    private boolean convert() {
-        Mapping mapping = mappingLoader.getMappingByIndex(selectedMapping.get());
+    private CompletableFuture<Boolean> convert() {
+        return CompletableFuture.supplyAsync(() -> {
+            Mapping mapping = mappingLoader.getMappingByIndex(selectedMapping.get());
 
-        List<ConversionResult> results = schematicConverter.convertMultiple(input_files, output_dir, mapping);
-        for (ConversionResult result : results) {
-            try {
-                HytalePrefab prefab = result.toHytalePrefab();
-                if (prefab != null) {
-                    prefab.save(result.getName(), output_dir);
-                    return true;
+//            progress.set(Math.min(Math.max((value + 1) / 100.0f, 0.0f), 1.0f));
+//            int percent = (index * 100) / (total - 1);
+
+            List<ConversionResult> results = schematicConverter.convertMultiple(input_files, output_dir, mapping, progress::set);
+
+            for (ConversionResult result : results) {
+                try {
+                    HytalePrefab prefab = result.toHytalePrefab();
+                    if (prefab != null) {
+                        logger.info("Saving : " + result.getName());
+                        prefab.save(result.getName(), output_dir);
+                    }
+                } catch (IOException e) {
+                    logger.error("Failed to save hytale prefab (name:'" + result.getName() + "'|output:'" + output_dir + "') : " + e.getMessage());
+                    return false;
                 }
-            } catch (IOException e) {
-                logger.error("Failed to save hytale prefab (name:'"+result.getName()+"'|output:'"+output_dir+"') : " + e.getMessage());
             }
-        }
-        return false;
+            return true;
+        });
     }
+
+
 
     private boolean dump() {
         Mapping mapping = mappingLoader.getMappingByIndex(selectedMapping.get());
 
-        List<ConversionResult> results = schematicConverter.convertMultiple(input_files, output_dir, mapping);
+        List<ConversionResult> results = schematicConverter.convertMultiple(input_files, output_dir, mapping, progress::set);
+
         for (ConversionResult result : results) {
             WriteResponse dump = result.dump();
             if (dump.success()) {
@@ -210,11 +235,11 @@ public class MainWindow {
         return false;
     }
 
-    private void selectInput(){
+    private void selectInput() {
         File path = new File(inputPath.get());
 
         if (directoryMode.get()) {
-            File selected = Utils.openDirectoryDialog(path.exists() ? path : Utils.AppDir(),"Select schematic Folder");
+            File selected = Utils.openDirectoryDialog(path.exists() ? path : Utils.AppDir(), "Select schematic Folder");
             if (selected != null) {
                 inputPath.set(selected.getAbsolutePath());
 
@@ -235,7 +260,7 @@ public class MainWindow {
 
     private void selectOutput() {
         File path = new File(outputPath.get());
-        output_dir = Utils.openDirectoryDialog(path.exists() ? path : Utils.AppDir(),"Select Output Folder");
+        output_dir = Utils.openDirectoryDialog(path.exists() ? path : Utils.AppDir(), "Select Output Folder");
         if (output_dir != null) {
             outputPath.set(output_dir.getAbsolutePath());
             storage.getData().setOutputPath(output_dir.getAbsolutePath());

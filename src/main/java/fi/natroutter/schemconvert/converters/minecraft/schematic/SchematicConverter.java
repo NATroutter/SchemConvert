@@ -15,8 +15,10 @@ import fi.natroutter.schemconvert.converters.minecraft.schematic.data.SchematicF
 import fi.natroutter.schemconvert.mappings.Mapping;
 
 import java.io.*;
+import java.math.BigInteger;
 import java.util.*;
-import java.util.stream.Collectors;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.zip.GZIPInputStream;
 
 import com.sk89q.jnbt.*;
@@ -26,9 +28,13 @@ public class SchematicConverter implements IConverter {
     private static FoxLogger logger = SchemConvert.getLogger();
     private static LegacyRegistry legacyRegistry = SchemConvert.getLegacyRegistry();
 
+
+
+
     @Override
-    public ConversionResult convertSingle(File input_file, File output_dir, Mapping mapping) {
-        SchematicData schematic = loadSchematicManually(input_file);
+    public ConversionResult convertSingle(File input_file, File output_dir, Mapping mapping, Consumer<Float> progress) {
+
+        SchematicData schematic = loadSchematic(input_file, progress);
         if (schematic == null) return null;
 
         String name = FileUtils.getBasename(input_file);
@@ -36,14 +42,18 @@ public class SchematicConverter implements IConverter {
         return new ConversionResult(name, blocks, mapping);
     }
 
+
+
     private List<UniBlock> schematicToUniBlocks(SchematicData schematic) {
         List<SchematicBlock> blocks = schematic.getBlocks();
         if (blocks == null) return null;
-
         return blocks.stream().map(SchematicBlock::toUniBlock).toList();
     }
 
-    private static SchematicData loadSchematicManually(File file) {
+
+
+
+    private static SchematicData loadSchematic(File file, Consumer<Float> progress) {
         try (NBTInputStream nbt = new NBTInputStream(new GZIPInputStream(new FileInputStream(file)))) {
             // Handle Generic Tag<?> Issue
             NamedTag rootNamed = nbt.readNamedTag();
@@ -53,7 +63,7 @@ public class SchematicConverter implements IConverter {
             }
 
             CompoundTag rootTag = (CompoundTag) rootNamed.getTag();
-            Map<String, Tag<?,?>> data = rootTag.getValue();
+            Map<String, Tag<?, ?>> data = rootTag.getValue();
 
             // 1. Handle "Schematic" Wrapper
             if (data.containsKey("Schematic")) {
@@ -66,15 +76,15 @@ public class SchematicConverter implements IConverter {
             if (blocksTag instanceof CompoundTag) {
                 // "Blocks" is a Container -> It's Sponge V3
                 logger.info("Parsing Schematic: " + FileUtils.getBasename(file) + " | Version: " + SchematicFormat.SPONGE_V3.name());
-                return parseSpongeV3(data, (CompoundTag) blocksTag);
+                return parseSpongeV3(data, (CompoundTag) blocksTag, progress);
             } else if (blocksTag instanceof ByteArrayTag) {
                 // "Blocks" is a ByteArray -> It's Legacy
                 logger.info("Parsing Schematic: " + FileUtils.getBasename(file) + " | Version: " + SchematicFormat.LEGACY.name());
-                return parseLegacy(data);
+                return parseLegacy(data, progress);
             } else if (data.containsKey("Palette")) {
                 // "Palette" at top level -> Sponge V1/V2
                 logger.info("Parsing Schematic: " + FileUtils.getBasename(file) + " | Version: " + SchematicFormat.SPONGE_V2.name());
-                return parseSpongeV2(data);
+                return parseSpongeV2(data, progress);
             }
 
             logger.error("Unknown Structure. Keys: " + data.keySet());
@@ -86,19 +96,70 @@ public class SchematicConverter implements IConverter {
         }
     }
 
+    // --- PARSER: SPONGE V2 (Fallback) ---
+    private static SchematicData parseSpongeV2(Map<String, Tag<?, ?>> data, Consumer<Float> progress) {
+        int width = ((ShortTag) data.get("Width")).getValue();
+        int height = ((ShortTag) data.get("Height")).getValue();
+        int length = ((ShortTag) data.get("Length")).getValue();
+
+        Map<String, Tag<?, ?>> paletteTag = ((CompoundTag) data.get("Palette")).getValue();
+        Map<Integer, String> palette = new HashMap<>();
+        //todo int plaette?
+        for (Map.Entry<String, Tag<?, ?>> entry : paletteTag.entrySet()) {
+            palette.put(((IntTag) entry.getValue()).getValue(), entry.getKey());
+        }
+
+        // V2 usually calls it "BlockData", V3 calls it "Data"
+        String key = data.containsKey("BlockData") ? "BlockData" : "Data";
+        byte[] blockDataBytes = ((ByteArrayTag) data.get(key)).getValue();
+        int[] indices = readVarIntArray(blockDataBytes, width * height * length);
+
+        int count = 0;
+
+        List<SchematicBlock> blockList = new ArrayList<>();
+
+        long total = (long) width * height * length;
+
+        FoxLib.println("width: " + width);
+        FoxLib.println("height: " + height);
+        FoxLib.println("length: " + length);
+        FoxLib.println("total: " + total);
+
+        for (int y = 0; y < height; y++) {
+            for (int z = 0; z < length; z++) {
+                for (int x = 0; x < width; x++) {
+                    long indexCalc = ((long) y * length + z) * width + x;
+                    if (indexCalc >= indices.length) continue;
+
+                    calcProgress(indexCalc,total, progress);
+
+                    int index = (int) indexCalc;
+
+                    BlockStringResult result = parseBlockString(
+                            palette.getOrDefault(indices[index], "minecraft:air")
+                    );
+                    blockList.add(new SchematicBlock(x, y, z, result.getId(), result.getProperties()));
+                    count++;
+                }
+            }
+        }
+        FoxLib.println(count + " - " + total);
+        return new SchematicData(width, height, length, SchematicFormat.SPONGE_V2, blockList);
+    }
+
     // --- PARSER: SPONGE V3 ---
-    private static SchematicData parseSpongeV3(Map<String, Tag<?,?>> rootData, CompoundTag blocksContainer) {
+    private static SchematicData parseSpongeV3(Map<String, Tag<?, ?>> rootData, CompoundTag blocksContainer, Consumer<Float> progress) {
         // Dimensions are at the ROOT level
         int width = ((ShortTag) rootData.get("Width")).getValue();
         int height = ((ShortTag) rootData.get("Height")).getValue();
         int length = ((ShortTag) rootData.get("Length")).getValue();
 
-        Map<String, Tag<?,?>> blocksMap = blocksContainer.getValue();
+        Map<String, Tag<?, ?>> blocksMap = blocksContainer.getValue();
 
         // 1. Palette is inside "Blocks"
-        Map<String, Tag<?,?>> paletteTag = ((CompoundTag) blocksMap.get("Palette")).getValue();
+        Map<String, Tag<?, ?>> paletteTag = ((CompoundTag) blocksMap.get("Palette")).getValue();
         Map<Integer, String> palette = new HashMap<>();
-        for (Map.Entry<String, Tag<?,?>> entry : paletteTag.entrySet()) {
+        for (Map.Entry<String, Tag<?, ?>> entry : paletteTag.entrySet()) {
             palette.put(((IntTag) entry.getValue()).getValue(), entry.getKey());
         }
 
@@ -110,11 +171,21 @@ public class SchematicConverter implements IConverter {
 
         List<SchematicBlock> blockList = new ArrayList<>();
 
+        long total = (long)width * height * length;
+
+
+        FoxLib.println("width: " + width);
+        FoxLib.println("height: " + height);
+        FoxLib.println("length: " + length);
+        FoxLib.println("total: " + total);
+
+
         for (int y = 0; y < height; y++) {
             for (int z = 0; z < length; z++) {
                 for (int x = 0; x < width; x++) {
                     int index = (y * length + z) * width + x;
                     if (index >= indices.length) continue;
+                    calcProgress(index,total, progress);
 
                     int paletteId = indices[index];
                     String rawString = palette.getOrDefault(paletteId, "minecraft:air");
@@ -127,8 +198,14 @@ public class SchematicConverter implements IConverter {
         return new SchematicData(width, height, length, SchematicFormat.SPONGE_V3, blockList);
     }
 
+    private static void calcProgress(long index, long total, Consumer<Float> progress) {
+//        long percent = (index * 100) / (total - 1);
+//        float a = Math.min(Math.max((percent + 1) / 100.0f, 0.0f), 1.0f);
+//        progress.accept(1.0f);
+    }
+
     // --- PARSER: LEGACY ---
-    private static SchematicData parseLegacy(Map<String, Tag<?,?>> data) {
+    private static SchematicData parseLegacy(Map<String, Tag<?, ?>> data, Consumer<Float> progress) {
         int width = ((ShortTag) data.get("Width")).getValue();
         int height = ((ShortTag) data.get("Height")).getValue();
         int length = ((ShortTag) data.get("Length")).getValue();
@@ -139,12 +216,14 @@ public class SchematicConverter implements IConverter {
                 : new byte[blocks.length];
 
         List<SchematicBlock> blockList = new ArrayList<>();
-
+        int total = width * height * length;
         // Standard Legacy Order: Y -> Z -> X
         for (int y = 0; y < height; y++) {
             for (int z = 0; z < length; z++) {
                 for (int x = 0; x < width; x++) {
                     int index = (y * length + z) * width + x;
+
+                    calcProgress(index,total, progress);
 
                     // Convert signed byte to unsigned int
                     int id = blocks[index] & 0xFF;
@@ -159,40 +238,6 @@ public class SchematicConverter implements IConverter {
             }
         }
         return new SchematicData(width, height, length, SchematicFormat.LEGACY, blockList);
-    }
-
-    // --- PARSER: SPONGE V2 (Fallback) ---
-    private static SchematicData parseSpongeV2(Map<String, Tag<?,?>> data) {
-        int width = ((ShortTag) data.get("Width")).getValue();
-        int height = ((ShortTag) data.get("Height")).getValue();
-        int length = ((ShortTag) data.get("Length")).getValue();
-
-        Map<String, Tag<?,?>> paletteTag = ((CompoundTag) data.get("Palette")).getValue();
-        Map<Integer, String> palette = new HashMap<>();
-        for (Map.Entry<String, Tag<?,?>> entry : paletteTag.entrySet()) {
-            palette.put(((IntTag) entry.getValue()).getValue(), entry.getKey());
-        }
-
-        // V2 usually calls it "BlockData", V3 calls it "Data"
-        String key = data.containsKey("BlockData") ? "BlockData" : "Data";
-        byte[] blockDataBytes = ((ByteArrayTag) data.get(key)).getValue();
-        int[] indices = readVarIntArray(blockDataBytes, width * height * length);
-
-        List<SchematicBlock> blockList = new ArrayList<>();
-        for (int y = 0; y < height; y++) {
-            for (int z = 0; z < length; z++) {
-                for (int x = 0; x < width; x++) {
-                    int index = (y * length + z) * width + x;
-                    if (index >= indices.length) continue;
-
-                    BlockStringResult result = parseBlockString(
-                            palette.getOrDefault(indices[index], "minecraft:air")
-                    );
-                    blockList.add(new SchematicBlock(x, y, z, result.getId(), result.getProperties()));
-                }
-            }
-        }
-        return new SchematicData(width, height, length, SchematicFormat.SPONGE_V2, blockList);
     }
 
     private static BlockStringResult parseBlockString(String fullString) {
