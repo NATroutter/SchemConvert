@@ -7,6 +7,7 @@ import fi.natroutter.schemconvert.SchemConvert;
 import fi.natroutter.schemconvert.converters.ConversionResult;
 import fi.natroutter.schemconvert.converters.IConverter;
 import fi.natroutter.schemconvert.converters.UniBlock;
+import fi.natroutter.schemconvert.converters.minecraft.LegacyRegistry;
 import fi.natroutter.schemconvert.converters.minecraft.schematic.data.BlockStringResult;
 import fi.natroutter.schemconvert.converters.minecraft.schematic.data.SchematicBlock;
 import fi.natroutter.schemconvert.converters.minecraft.schematic.data.SchematicData;

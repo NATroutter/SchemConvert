@@ -12,7 +12,7 @@ import java.util.HashMap;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class SchematicBlock {
+public class SchematicBlock implements Cloneable {
     private int x;
     private int y;
     private int z;
@@ -44,4 +44,12 @@ public class SchematicBlock {
         return block;
     }
 
+    @Override
+    public SchematicBlock clone() {
+        try {
+            return (SchematicBlock) super.clone();
+        } catch (CloneNotSupportedException e) {
+            throw new AssertionError();
+        }
+    }
 }
