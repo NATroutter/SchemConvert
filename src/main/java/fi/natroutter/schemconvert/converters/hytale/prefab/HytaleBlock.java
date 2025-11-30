@@ -9,11 +9,17 @@ import java.util.Map;
 
 @Getter
 @AllArgsConstructor
-@NoArgsConstructor
 public class HytaleBlock {
-    public String material;
-    public long x;
-    public long y;
-    public long z;
-    public Map<String, String> properties = new LinkedHashMap<>();
+    private String material;
+    private long x;
+    private long y;
+    private long z;
+    private Map<String, String> properties = new LinkedHashMap<>();
+
+    public HytaleBlock(String material,long x,long y,long z) {
+        this.material = material;
+        this.x = x;
+        this.y = y;
+        this.z = z;
+    }
 }

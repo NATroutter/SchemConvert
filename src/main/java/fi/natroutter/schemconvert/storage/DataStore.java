@@ -25,6 +25,10 @@ public class DataStore {
 
     private String mapping;
 
+    private int dumpMode;
+
+    private int convertMode;
+
     public static DataStore fromJson(String json) {
         Gson gson = new Gson();
         return gson.fromJson(json, DataStore.class);

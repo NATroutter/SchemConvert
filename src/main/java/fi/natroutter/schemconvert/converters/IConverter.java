@@ -11,12 +11,14 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 public interface IConverter {
-    ConversionResult convertSingle(File input_files, File output_dir, Mapping mapping, Consumer<Float> progress);
 
-    default List<ConversionResult> convertMultiple(List<File> input_files, File output_dir, Mapping mapping, Consumer<Float> progress){
+    ConversionResult convertSingle(File input_files, File output_dir, Mapping mapping, Consumer<Float> currentProgress);
+
+    default List<ConversionResult> convertMultiple(List<File> input_files, File output_dir, Mapping mapping, Consumer<Float> currentProgress, Consumer<Integer> totalProgress){
         List<ConversionResult> results = new ArrayList<>();
-        for (File file : input_files) {
-            results.add(convertSingle(file, output_dir, mapping, progress));
+        for (int i = 0; i < input_files.size(); i++) {
+            results.add(convertSingle(input_files.get(i), output_dir, mapping, currentProgress));
+            totalProgress.accept(i+1);
         }
         return results;
     }

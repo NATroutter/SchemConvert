@@ -15,9 +15,7 @@ import fi.natroutter.schemconvert.converters.minecraft.schematic.data.SchematicF
 import fi.natroutter.schemconvert.mappings.Mapping;
 
 import java.io.*;
-import java.math.BigInteger;
 import java.util.*;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.zip.GZIPInputStream;
 
@@ -29,12 +27,10 @@ public class SchematicConverter implements IConverter {
     private static LegacyRegistry legacyRegistry = SchemConvert.getLegacyRegistry();
 
 
-
-
     @Override
-    public ConversionResult convertSingle(File input_file, File output_dir, Mapping mapping, Consumer<Float> progress) {
+    public ConversionResult convertSingle(File input_file, File output_dir, Mapping mapping, Consumer<Float> currentProgress) {
 
-        SchematicData schematic = loadSchematic(input_file, progress);
+        SchematicData schematic = loadSchematic(input_file, currentProgress);
         if (schematic == null) return null;
 
         String name = FileUtils.getBasename(input_file);
@@ -43,14 +39,11 @@ public class SchematicConverter implements IConverter {
     }
 
 
-
     private List<UniBlock> schematicToUniBlocks(SchematicData schematic) {
         List<SchematicBlock> blocks = schematic.getBlocks();
         if (blocks == null) return null;
         return blocks.stream().map(SchematicBlock::toUniBlock).toList();
     }
-
-
 
 
     private static SchematicData loadSchematic(File file, Consumer<Float> progress) {
@@ -96,188 +89,249 @@ public class SchematicConverter implements IConverter {
         }
     }
 
-    // --- PARSER: SPONGE V2 (Fallback) ---
+    // --- PARSER: SPONGE V2 ---
     private static SchematicData parseSpongeV2(Map<String, Tag<?, ?>> data, Consumer<Float> progress) {
         int width = ((ShortTag) data.get("Width")).getValue();
         int height = ((ShortTag) data.get("Height")).getValue();
         int length = ((ShortTag) data.get("Length")).getValue();
 
-        Map<String, Tag<?, ?>> paletteTag = ((CompoundTag) data.get("Palette")).getValue();
-        Map<Integer, String> palette = new HashMap<>();
-        //todo int plaette?
-        for (Map.Entry<String, Tag<?, ?>> entry : paletteTag.entrySet()) {
-            palette.put(((IntTag) entry.getValue()).getValue(), entry.getKey());
-        }
+        // V2: Palette is at Root
+        Map<String, Tag<?, ?>> palette = ((CompoundTag) data.get("Palette")).getValue();
 
-        // V2 usually calls it "BlockData", V3 calls it "Data"
+        // V2: Data is at Root (named BlockData or Data)
         String key = data.containsKey("BlockData") ? "BlockData" : "Data";
-        byte[] blockDataBytes = ((ByteArrayTag) data.get(key)).getValue();
-        int[] indices = readVarIntArray(blockDataBytes, width * height * length);
+        byte[] blockData = ((ByteArrayTag) data.get(key)).getValue();
 
-        int count = 0;
-
-        List<SchematicBlock> blockList = new ArrayList<>();
-
-        long total = (long) width * height * length;
-
-        FoxLib.println("width: " + width);
-        FoxLib.println("height: " + height);
-        FoxLib.println("length: " + length);
-        FoxLib.println("total: " + total);
-
-        for (int y = 0; y < height; y++) {
-            for (int z = 0; z < length; z++) {
-                for (int x = 0; x < width; x++) {
-                    long indexCalc = ((long) y * length + z) * width + x;
-                    if (indexCalc >= indices.length) continue;
-
-                    calcProgress(indexCalc,total, progress);
-
-                    int index = (int) indexCalc;
-
-                    BlockStringResult result = parseBlockString(
-                            palette.getOrDefault(indices[index], "minecraft:air")
-                    );
-                    blockList.add(new SchematicBlock(x, y, z, result.getId(), result.getProperties()));
-                    count++;
-                }
-            }
-        }
-        FoxLib.println(count + " - " + total);
-        return new SchematicData(width, height, length, SchematicFormat.SPONGE_V2, blockList);
+        return parseSpongeCommon(width, height, length, palette, blockData, SchematicFormat.SPONGE_V2, progress);
     }
 
     // --- PARSER: SPONGE V3 ---
     private static SchematicData parseSpongeV3(Map<String, Tag<?, ?>> rootData, CompoundTag blocksContainer, Consumer<Float> progress) {
-        // Dimensions are at the ROOT level
+        // Dimensions are at Root
         int width = ((ShortTag) rootData.get("Width")).getValue();
         int height = ((ShortTag) rootData.get("Height")).getValue();
         int length = ((ShortTag) rootData.get("Length")).getValue();
 
         Map<String, Tag<?, ?>> blocksMap = blocksContainer.getValue();
 
-        // 1. Palette is inside "Blocks"
-        Map<String, Tag<?, ?>> paletteTag = ((CompoundTag) blocksMap.get("Palette")).getValue();
-        Map<Integer, String> palette = new HashMap<>();
+        // V3: Palette is inside "Blocks" container
+        Map<String, Tag<?, ?>> palette = ((CompoundTag) blocksMap.get("Palette")).getValue();
+
+        // V3: Data is inside "Blocks" container
+        byte[] blockData = ((ByteArrayTag) blocksMap.get("Data")).getValue();
+
+        return parseSpongeCommon(width, height, length, palette, blockData, SchematicFormat.SPONGE_V3, progress);
+    }
+
+    private static SchematicData parseSpongeCommon(int width, int height, int length,
+                                                   Map<String, Tag<?, ?>> paletteTag,
+                                                   byte[] blockDataBytes,
+                                                   SchematicFormat format,
+                                                   Consumer<Float> progress) {
+
+        // 1. PALETTE CACHING
+        Map<Integer, BlockStringResult> paletteCache = new HashMap<>();
+        int airPaletteId = -1;
+
         for (Map.Entry<String, Tag<?, ?>> entry : paletteTag.entrySet()) {
-            palette.put(((IntTag) entry.getValue()).getValue(), entry.getKey());
+            int id = ((IntTag) entry.getValue()).getValue();
+            String blockRaw = entry.getKey();
+
+            // Helper method handles caching internally now
+            BlockStringResult parsed = parseBlockString(blockRaw);
+            paletteCache.put(id, parsed);
+
+            if (blockRaw.contains("minecraft:air")) {
+                airPaletteId = id;
+            }
         }
 
-        // 2. Data is inside "Blocks"
-        byte[] blockDataBytes = ((ByteArrayTag) blocksMap.get("Data")).getValue();
-
-        // Sponge uses VarInts packed into a ByteArray
-        int[] indices = readVarIntArray(blockDataBytes, width * height * length);
-
+        // 2. SETUP PROGRESS & LOOP
+        long total = (long) width * height * length;
         List<SchematicBlock> blockList = new ArrayList<>();
 
-        long total = (long)width * height * length;
+        int byteIndex = 0;
+        long currentBlockIndex = 0;
+        long onePercentStep = Math.max(1, total / 100);
+        long nextThreshold = onePercentStep;
 
+        progress.accept(0.0f);
 
-        FoxLib.println("width: " + width);
-        FoxLib.println("height: " + height);
-        FoxLib.println("length: " + length);
-        FoxLib.println("total: " + total);
-
-
+        // 3. MAIN LOOP (Optimized for V2/V3)
         for (int y = 0; y < height; y++) {
             for (int z = 0; z < length; z++) {
                 for (int x = 0; x < width; x++) {
-                    int index = (y * length + z) * width + x;
-                    if (index >= indices.length) continue;
-                    calcProgress(index,total, progress);
 
-                    int paletteId = indices[index];
-                    String rawString = palette.getOrDefault(paletteId, "minecraft:air");
+                    // Progress Update (Fast Int Math)
+                    currentBlockIndex++;
+                    if (currentBlockIndex >= nextThreshold) {
+                        progress.accept((float) ((double) currentBlockIndex / total));
+                        nextThreshold += onePercentStep;
+                    }
 
-                    BlockStringResult result = parseBlockString(rawString);
-                    blockList.add(new SchematicBlock(x, y, z, result.getId(), result.getProperties()));
+                    // Safety Break
+                    if (byteIndex >= blockDataBytes.length) break;
+
+                    // Inline VarInt Reading
+                    int paletteId = 0;
+                    int shift = 0;
+                    while (true) {
+                        byte b = blockDataBytes[byteIndex++];
+                        paletteId |= (b & 0x7F) << shift;
+                        if ((b & 0x80) == 0) break;
+                        shift += 7;
+                    }
+
+                    // Skip Air
+                    if (paletteId == airPaletteId) continue;
+
+                    // Add Block
+                    BlockStringResult result = paletteCache.get(paletteId);
+                    if (result != null) {
+                        blockList.add(new SchematicBlock(x, y, z, result.getId(), result.getProperties()));
+                    }
                 }
             }
         }
-        return new SchematicData(width, height, length, SchematicFormat.SPONGE_V3, blockList);
+
+        progress.accept(1.0f);
+        return new SchematicData(width, height, length, format, blockList);
     }
 
-    private static void calcProgress(long index, long total, Consumer<Float> progress) {
-//        long percent = (index * 100) / (total - 1);
-//        float a = Math.min(Math.max((percent + 1) / 100.0f, 0.0f), 1.0f);
-//        progress.accept(1.0f);
-    }
-
-    // --- PARSER: LEGACY ---
     private static SchematicData parseLegacy(Map<String, Tag<?, ?>> data, Consumer<Float> progress) {
         int width = ((ShortTag) data.get("Width")).getValue();
         int height = ((ShortTag) data.get("Height")).getValue();
         int length = ((ShortTag) data.get("Length")).getValue();
 
         byte[] blocks = ((ByteArrayTag) data.get("Blocks")).getValue();
-        byte[] meta = data.containsKey("Data")
-                ? ((ByteArrayTag) data.get("Data")).getValue()
-                : new byte[blocks.length];
+
+        // Optimization: Flag check instead of empty array allocation
+        boolean hasMeta = data.containsKey("Data");
+        byte[] meta = hasMeta ? ((ByteArrayTag) data.get("Data")).getValue() : null;
 
         List<SchematicBlock> blockList = new ArrayList<>();
-        int total = width * height * length;
-        // Standard Legacy Order: Y -> Z -> X
+        long total = (long) width * height * length;
+
+        long currentBlockIndex = 0;
+        long onePercentStep = Math.max(1, total / 100);
+        long nextThreshold = onePercentStep;
+
+        // Linear index is faster than (y*len+z)*width+x inside loop
+        int index = 0;
+
+        progress.accept(0.0f);
+
         for (int y = 0; y < height; y++) {
             for (int z = 0; z < length; z++) {
                 for (int x = 0; x < width; x++) {
-                    int index = (y * length + z) * width + x;
 
-                    calcProgress(index,total, progress);
+                    // Progress Update
+                    currentBlockIndex++;
+                    if (currentBlockIndex >= nextThreshold) {
+                        progress.accept((float) ((double) currentBlockIndex / total));
+                        nextThreshold += onePercentStep;
+                    }
 
-                    // Convert signed byte to unsigned int
                     int id = blocks[index] & 0xFF;
-                    int dataVal = meta[index] & 0xF;
 
-                    SchematicBlock schematicBlock = legacyRegistry.get(id, dataVal).clone();
-                    schematicBlock.setX(x);
-                    schematicBlock.setY(y);
-                    schematicBlock.setZ(z);
-                    blockList.add(schematicBlock);
+                    // Optimization: Fast Skip Air (Legacy 0 is always Air)
+                    if (id == 0) {
+                        index++;
+                        continue;
+                    }
+
+                    int dataVal = hasMeta ? (meta[index] & 0xF) : 0;
+                    SchematicBlock template = legacyRegistry.get(id, dataVal);
+
+                    if (template != null) {
+                        SchematicBlock sb = template.clone();
+                        sb.setX(x);
+                        sb.setY(y);
+                        sb.setZ(z);
+                        blockList.add(sb);
+                    }
+
+                    index++;
                 }
             }
         }
+
+        progress.accept(1.0f);
         return new SchematicData(width, height, length, SchematicFormat.LEGACY, blockList);
     }
 
-    private static BlockStringResult parseBlockString(String fullString) {
-        if (!fullString.contains("[")) {
-            return new BlockStringResult(fullString, new HashMap<>());
+    private static final Map<String, BlockStringResult> BLOCK_CACHE = new HashMap<>();
+
+    public static BlockStringResult parseBlockString(String fullString) {
+        // Check Cache
+        BlockStringResult cached = BLOCK_CACHE.get(fullString);
+        if (cached != null) {
+            return cached;
         }
 
-        String id = fullString.substring(0, fullString.indexOf("["));
-        String propsRaw = fullString.substring(fullString.indexOf("[") + 1, fullString.indexOf("]"));
+        int bracketIndex = fullString.indexOf('[');
 
-        HashMap<String, String> props = new HashMap<>();
-        for (String prop : propsRaw.split(",")) {
-            String[] parts = prop.split("=");
-            if (parts.length == 2) {
-                props.put(parts[0], parts[1]);
-            } else {
-                props.put(prop, "true");
-            }
+        // Case 1: Simple Block (e.g., "minecraft:stone")
+        if (bracketIndex == -1) {
+            // Optimization: Use new HashMap() if your constructor requires it.
+            // If you change constructor to Map<String, String>, use Collections.emptyMap()
+            BlockStringResult result = new BlockStringResult(fullString, new HashMap<>());
+            BLOCK_CACHE.put(fullString, result);
+            return result;
         }
-        return new BlockStringResult(id, props);
+
+        // Case 2: Complex Block (e.g., "minecraft:wool[color=red]")
+        String id = fullString.substring(0, bracketIndex);
+
+        // Extract inner string: "color=red,type=hard"
+        String propsRaw = fullString.substring(bracketIndex + 1, fullString.length() - 1);
+
+        // Call extracted method
+        HashMap<String, String> props = parseProperties(propsRaw);
+
+        BlockStringResult result = new BlockStringResult(id, props);
+        BLOCK_CACHE.put(fullString, result);
+        return result;
     }
 
-    // --- HELPER: Decode VarInt Stream ---
-    private static int[] readVarIntArray(byte[] buf, int expectedSize) {
-        int[] result = new int[expectedSize];
-        int index = 0;
-        int i = 0;
+    // --- Extracted Helper Method ---
+    private static HashMap<String, String> parseProperties(String propsRaw) {
+        HashMap<String, String> props = new HashMap<>();
 
-        while (i < buf.length && index < expectedSize) {
-            int value = 0;
-            int shift = 0;
+        int len = propsRaw.length();
+        int start = 0;
 
-            while (true) {
-                int b = buf[i++] & 0xFF;
-                value = value | ((b & 0x7F) << shift);
-                if ((b & 0x80) == 0) break;
-                shift += 7;
+        while (start < len) {
+            // Find end of current property (comma or end of string)
+            int end = propsRaw.indexOf(',', start);
+            if (end == -1) {
+                end = len;
             }
-            result[index++] = value;
+
+            // Find separator (=) inside this segment
+            int eqIndex = -1;
+            // Optimization: iterate only the current segment, not whole string
+            for (int i = start; i < end; i++) {
+                if (propsRaw.charAt(i) == '=') {
+                    eqIndex = i;
+                    break;
+                }
+            }
+
+            if (eqIndex != -1) {
+                // Standard "key=value"
+                String key = propsRaw.substring(start, eqIndex);
+                String val = propsRaw.substring(eqIndex + 1, end);
+                props.put(key, val);
+            } else {
+                // Edge case "key" (implies =true)
+                String key = propsRaw.substring(start, end);
+                props.put(key, "true");
+            }
+
+            start = end + 1;
         }
-        return result;
+
+        return props;
     }
 }

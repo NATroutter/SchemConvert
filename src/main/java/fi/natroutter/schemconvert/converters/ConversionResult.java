@@ -2,20 +2,18 @@ package fi.natroutter.schemconvert.converters;
 
 import fi.natroutter.foxlib.FoxLib;
 import fi.natroutter.foxlib.files.FileUtils;
-import fi.natroutter.foxlib.files.ReadResponse;
 import fi.natroutter.foxlib.files.WriteResponse;
 import fi.natroutter.schemconvert.converters.hytale.prefab.HytaleBlock;
 import fi.natroutter.schemconvert.converters.hytale.prefab.HytalePrefab;
 import fi.natroutter.schemconvert.mappings.Mapping;
-import fi.natroutter.schemconvert.utilities.Utils;
 import lombok.AllArgsConstructor;
 
 import lombok.Data;
-import lombok.NoArgsConstructor;
 
 import java.io.File;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 @Data
@@ -26,100 +24,129 @@ public class ConversionResult {
     private List<UniBlock> blocks;
     private Mapping mapping;
 
-    public HytalePrefab toHytalePrefab() {
+    public HytalePrefab toHytalePrefab(Consumer<Float> progress) {
         List<HytaleBlock> hyBlocks = new ArrayList<>();
-        for (UniBlock block : blocks) {
-            Mapping.Entry mappingEntry = findMappingEntry(block, mapping);
+        int totalBlocks = blocks.size();
+
+        for (int i = 0; i < totalBlocks; i++) {
+            UniBlock block = blocks.get(i);
+
+            // Report progress between 0.0-1.0
+            float progressValue = (float) i / totalBlocks;
+            progress.accept(progressValue);
+
+            Mapping.Entry mappingEntry = null;
+
+            //find Mapping Entry
+            for (Mapping.Entry entry : mapping.getEntries()) {
+                if (entry.getMc_material().equalsIgnoreCase(block.getMaterial())) {
+                    if (matchesCondition(entry, block.getProperties())) {
+                        mappingEntry = entry;
+                        break;
+                    }
+                }
+            }
+
+            //Specific material mapping not found, skipping and continuing to next material!
             if (mappingEntry == null) {
                 continue;
             }
 
-            HytaleBlock hytaleBlock = new HytaleBlock();
-            hytaleBlock.material = mappingEntry.getHy_material();
-            hytaleBlock.x = block.getX();
-            hytaleBlock.y = block.getY();
-            hytaleBlock.z = block.getZ();
+            HytaleBlock hytaleBlock = new HytaleBlock(
+                    mappingEntry.getHy_material(),
+                    block.getX(),
+                    block.getY(),
+                    block.getZ()
+            );
 
-            applyConditionProperties(hytaleBlock, mappingEntry, block.getProperties());
+            //apply Condition Properties
+            for (Mapping.Condition condition : mappingEntry.getConditions()) {
+                if (condition.getCondition().isEmpty() || matchesConditionString(condition.getCondition(), block.getProperties())) {
+
+                    //apply Properties
+                    if (condition.getNewProperties() == null || condition.getNewProperties().isEmpty()) continue;
+                    String[] properties = condition.getNewProperties().split(":");
+                    for (String property : properties) {
+                        String[] keyValue = property.split("=");
+                        if (keyValue.length == 2) {
+                            String key = keyValue[0].trim();
+                            String value = keyValue[1].trim();
+                            hytaleBlock.getProperties().put(key, value);
+                        }
+                    }
+                    break;
+                }
+            }
+
             hyBlocks.add(hytaleBlock);
         }
+
+        // Report completion
+        progress.accept(1.0f);
         return new HytalePrefab(hyBlocks);
     }
 
-    public WriteResponse dump() {
+    public WriteResponse dump(DumpMode mode, Consumer<Float> progress) {
         StringBuilder str = new StringBuilder();
         str.append("Name: ").append(name).append("\n");
         str.append("Date: ").append(FoxLib.getTimestamp()).append("\n");
+        str.append("Block Count: ").append(blocks.size()).append("\n");
         str.append("--------------").append("\n");
-        for (UniBlock block : blocks) {
-            String data = block.getProperties().entrySet().stream()
-                    .map(e -> e.getKey() + "=" + e.getValue())
-                    .collect(Collectors.joining(","));
 
-            str.append(block.getMaterial());
-            str.append("(").append(block.getX()).append(",").append(block.getY()).append(",").append(block.getZ()).append(")");
-            if (!data.isEmpty()) {
-                str.append("[").append(data).append("]");
+        List<String> materials = new ArrayList<>();
+        int totalBlocks = blocks.size();
+
+        for (int i = 0; i < totalBlocks; i++) {
+            UniBlock block = blocks.get(i);
+
+            // Report progress between 0.0-1.0
+            float progressValue = (float) i / totalBlocks;
+            progress.accept(progressValue);
+
+            switch (mode) {
+                case EVERYTHING -> {
+                    String data = block.getProperties().entrySet().stream()
+                            .map(e -> e.getKey() + "=" + e.getValue())
+                            .collect(Collectors.joining(","));
+
+                    str.append(block.getMaterial());
+                    str.append("(").append(block.getX()).append(",").append(block.getY()).append(",").append(block.getZ()).append(")");
+                    if (!data.isEmpty()) {
+                        str.append("[").append(data).append("]");
+                    }
+                    str.append("\n");
+                }
+                case MATERIAL_ONLY -> {
+                    if (!materials.contains(block.getMaterial())) {
+                        str.append(block.getMaterial());
+                        str.append("\n");
+                        materials.add(block.getMaterial());
+                    }
+                }
             }
-
-            str.append("\n");
         }
+
+        // Report completion
+        progress.accept(1.0f);
 
         Path path = Path.of(System.getProperty("user.dir"), "dumps");
         path.toFile().mkdirs();
         File dump = new File(path.toFile(), "dump-"+name+"-"+FoxLib.getTimestamp()+".txt");
-        return FileUtils.writeFile(dump, str.toString());
+        return FileUtils.writeFile(dump, str.toString(), (p)-> {
+            FoxLib.println(name + " : " + p);
+        });
     }
 
 
-    private Mapping.Entry findMappingEntry(UniBlock data, Mapping mapping) {
-        for (Mapping.Entry entry : mapping.getEntries()) {
-            if (entry.getMc_material().equalsIgnoreCase(data.getMaterial())) {
-        //  if (entry.getMc_material().equalsIgnoreCase(data.getMaterial().name())) { //TODO material checking
-                if (matchesCondition(entry, data.getProperties())) {
-                    return entry;
-                }
-            }
-        }
-        return null;
-    }
-
-    private void applyConditionProperties(HytaleBlock hytalBlock, Mapping.Entry entry, Map<String, String> blockProperties) {
-        for (Mapping.Condition condition : entry.getConditions()) {
-            if (condition.getCondition().isEmpty() || matchesConditionString(condition.getCondition(), blockProperties)) {
-                applyProperties(hytalBlock, condition.getNewProperties());
-                break;
-            }
-        }
-    }
-
-    private void applyProperties(HytaleBlock hytalBlock, String propertiesStr) {
-        if (propertiesStr == null || propertiesStr.isEmpty()) {
-            return;
-        }
-
-        String[] properties = propertiesStr.split(":");
-        for (String property : properties) {
-            String[] keyValue = property.split("=");
-            if (keyValue.length == 2) {
-                String key = keyValue[0].trim();
-                String value = keyValue[1].trim();
-                hytalBlock.properties.put(key, value);
-            }
-        }
-    }
 
     private boolean matchesCondition(Mapping.Entry entry, Map<String, String> blockProperties) {
-        if (entry.getConditions() == null || entry.getConditions().isEmpty()) {
-            return true;
-        }
+        if (entry.getConditions() == null || entry.getConditions().isEmpty()) return true;
 
         for (Mapping.Condition condition : entry.getConditions()) {
             if (condition.getCondition().isEmpty() || matchesConditionString(condition.getCondition(), blockProperties)) {
                 return true;
             }
         }
-
         return false;
     }
 
